@@ -1,0 +1,152 @@
+- hosts: namenode,datanode
+
+  #common configurations namenode,datanode
+  tasks :
+  - name : Mounting DVD
+    mount :
+      src : "/dev/cdrom"
+      path : "/dvd"
+      state : mounted
+      fstype : "iso9660"
+
+  - name : Local Repo
+    yum_repository :
+      name : Repo1
+      description : "Local repo 1"
+      baseurl : "/dev/AppStream"
+      gpgcheck : 0
+
+  - name : Local Repo setup
+    yum_repository :
+      name : Repo2
+      description : "Local repo 2"
+      baseurl : "/dev/BaseOS"
+      gpgcheck : 0
+  
+  - name : "Checking whether jdk exists or not"
+    tags : jdk
+    command : "rpm -q java | grep jdk1.8-2000.1.8.0_171-fcs.x86_64 | grep -v grep"
+    changed_when : false
+    ignore_errors : yes
+    register : java_install_status
+
+  - name : "JDK installation"
+    tags : jdk
+    command : "rpm -ivh jdk-8u171-linux-x64.rpm"
+    ignore_errors : yes
+    when : java_install_status.rc == 4
+    
+
+  - name : "Checking whether hadoop exists or not"
+    tags : hadoop
+    command : "rpm -q hadoop | grep hadoop-1.2.1-1.x86_64 | grep -v grep"
+    changed_when : false
+    ignore_errors : yes
+    register : hadoop_status
+
+
+  - name : "Hadoop installation"
+    tags :  hadoop
+    command : "rpm -ivh hadoop-1.2.1-1.x86_64.rpm --force"
+    ignore_errors: yes
+    when : hadoop_status.rc == 4
+    
+    
+  - name : stop firewalld
+    shell : "systemctl stop firewalld"
+    ignore_errors : yes
+    
+    #namenode configuration
+- hosts: namenode
+  gather_facts : no
+  vars_prompt:
+  - name : namedir
+    private : no
+    prompt : "Enter namenode dir name e.g. /{dir}"
+  
+  tasks:   
+  - name : Creating namenode dir
+    file :
+      state : directory 
+      path : "{{ namedir }}"
+    ignore_errors: True
+    register : directory 
+   
+  - name : configuring hdfs-site.xml
+    lineinfile: 
+      path : "/etc/hadoop/hdfs-site.xml"
+      insertafter : "<configuration>"
+      line : "<property>\n\t <name>dfs.name.dir</name>\n
+      \t <value>{{ namedir }}</value>\n
+      </property>"
+
+  - name : configuring core-site.xml
+    lineinfile:
+       path: "/etc/hadoop/core-site.xml"
+       insertafter : "<configuration>"
+       line : "<property>\n\t <name>fs.default.name</name>\n
+       \t <value>hdfs://0.0.0.0:9001</value>\n
+       </property>"
+   
+  - name: formatting namenode dir   
+    command : "echo Y | hadoop namenode -format -force"
+    ignore_errors : yes
+    when : directory.changed == true
+
+  - name : "Hadoop daemon service status check!"
+    tags : namenode
+    shell : "jps | grep NameNode | grep -v grep"
+    ignore_errors : yes
+    register : namenode_status
+
+  - name: starting hadoop-daemon namenode service
+    tags : namenode
+    ignore_errors: yes
+    shell : "hadoop-daemon.sh start namenode"
+    when : namenode_status.rc == 1
+ 
+    #datanode configurations
+- hosts: datanode
+  gather_facts : no
+  vars_prompt:
+  - name: datadir
+    private : no
+    prompt : "Enter datanode dir name e.g. /{dir}"
+
+  tasks :
+  - name: "Creating datanode dir"
+    file:
+      state : directory 
+      path : "{{ datadir }}"    
+    ignore_errors : True 
+
+
+  - name : configuring hdfs-site.xml
+    lineinfile:
+      path : "/etc/hadoop/hdfs-site.xml"
+      insertafter : "<configuration>"
+      line : "<property>\n
+      \t <name>dfs.data.dir</name>\n
+      \t <value>{{ datadir }}</value>\n
+      </property>"
+
+  - name : configuring core-site.xml
+    lineinfile:
+       path: "/etc/hadoop/core-site.xml"
+       insertafter : "<configuration>"
+       line : "<property>\n\t
+       <name>fs.default.name</name>\n\t
+       <value>hdfs://{{ groups['namenode'][0] }}:9001</value>
+       \n</property>"
+    
+  - name : checking datanode daemon status
+    tags : datanode
+    shell : "jps | grep DataNode | grep -v grep"
+    ignore_errors : yes
+    register : datanode_status
+
+  - name : starting data node daemon
+    tags : datanode  
+    command : "hadoop-daemon.sh start datanode"
+    ignore_errors: yes 
+    when : datanode_status.rc == 1  
